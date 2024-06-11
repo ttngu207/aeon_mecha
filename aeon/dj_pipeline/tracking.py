@@ -106,6 +106,93 @@ class TrackingParamSet(dj.Lookup):
 # ---------- VideoSource  ------------------
 
 
+# @schema
+class SLEAPIdentityCorrection(dj.Imported):
+    definition = """  # Tracked objects position data from a particular VideoSource for multi-animal experiment using the SLEAP tracking method per chunk
+    -> acquisition.Chunk
+    -> streams.SpinnakerVideoSource
+    """
+
+    @property
+    def key_source(self):
+        return (
+            acquisition.Chunk
+            * (
+                streams.SpinnakerVideoSource.join(streams.SpinnakerVideoSource.RemovalTime, left=True)
+                & "spinnaker_video_source_name='CameraTop'"
+            )
+            & "chunk_start >= spinnaker_video_source_install_time"
+            & 'chunk_start < IFNULL(spinnaker_video_source_removal_time, "2200-01-01")'
+        )  # SLEAP & CameraTop
+
+    def make(self, key):
+        from aeon.analysis.sleap_postprocessing import resolve_duplicate_identities, resolve_swapped_identities
+
+        chunk_start, chunk_end = (acquisition.Chunk & key).fetch1("chunk_start", "chunk_end")
+
+        data_dirs = acquisition.Experiment.get_data_directories(key)
+
+        device_name = (streams.SpinnakerVideoSource & key).fetch1("spinnaker_video_source_name")
+
+        devices_schema = getattr(
+            aeon_schemas,
+            (acquisition.Experiment.DevicesSchema & {"experiment_name": key["experiment_name"]}).fetch1(
+                "devices_schema_name"
+            ),
+        )
+        stream_reader = getattr(getattr(devices_schema, device_name), "Pose")
+
+        pose_data = io_api.load(
+            root=data_dirs,
+            reader=stream_reader,
+            start=pd.Timestamp(chunk_start),
+            end=pd.Timestamp(chunk_end),
+        )
+
+        if not len(pose_data):
+            raise ValueError(f"No SLEAP data found for {key['experiment_name']} - {device_name}")
+
+        # Find the config file for the SLEAP model
+        for data_dir in data_dirs:
+            try:
+                f = next(
+                    data_dir.glob(
+                        f"**/**/{stream_reader.pattern}{io_api.chunk(chunk_start).strftime('%Y-%m-%dT%H-%M-%S')}*.{stream_reader.extension}"
+                    )
+                )
+            except StopIteration:
+                continue
+            else:
+                config_file = stream_reader.get_config_file(
+                    stream_reader._model_root / Path(*Path(f.stem.replace("_", "/")).parent.parts[1:])
+                )
+                break
+        else:
+            raise FileNotFoundError(f"Unable to find SLEAP model config file for: {stream_reader.pattern}")
+
+        # get bodyparts and classes
+        bodyparts = stream_reader.get_bodyparts(config_file)
+        anchor_part = bodyparts[0]  # anchor_part is always the first one
+        class_names = stream_reader.get_class_names(config_file)
+
+        # extract only the positions of the anchor part
+        all_pos = pose_data[pose_data["part"] == anchor_part]
+        all_pos.rename(columns={"part_likelihood": "likelihood"}, inplace=True)
+        all_pos["identity_name"] = all_pos["class"].copy()
+
+        # Step 1: Resolve duplicate identities
+        all_pos_df1 = resolve_duplicate_identities(all_pos)
+        # Step 2: Resolve swapped identities
+        all_pos_df2 = resolve_swapped_identities(all_pos_df1)
+
+        # update the "class" in the original "pose_data" dataframe with the corrected "identity_name" in "all_pos_df2", based on the "time" index
+        swapper = dict(zip(all_pos_df2.index, all_pos_df2["identity_name"]))
+        pose_data["class"] = pose_data.index.map(swapper)
+
+        # write "pose_data" back to the file in the "processed" folder
+        raise NotImplementedError
+
+
 @schema
 class SLEAPTracking(dj.Imported):
     definition = """  # Tracked objects position data from a particular VideoSource for multi-animal experiment using the SLEAP tracking method per chunk
@@ -310,3 +397,6 @@ def _get_position(
     time_mask = np.logical_and(position.index >= start, position.index < end)
 
     return position[time_mask]
+
+
+# ---- F
