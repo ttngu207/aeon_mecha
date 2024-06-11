@@ -181,16 +181,21 @@ class SLEAPIdentityCorrection(dj.Imported):
         all_pos["identity_name"] = all_pos["class"].copy()
 
         # Step 1: Resolve duplicate identities
-        all_pos_df1 = resolve_duplicate_identities(all_pos)
+        all_pos = resolve_duplicate_identities(all_pos)
         # Step 2: Resolve swapped identities
-        all_pos_df2 = resolve_swapped_identities(all_pos_df1)
+        all_pos = resolve_swapped_identities(all_pos)
 
         # update the "class" in the original "pose_data" dataframe with the corrected "identity_name" in "all_pos_df2", based on the "time" index
-        swapper = dict(zip(all_pos_df2.index, all_pos_df2["identity_name"]))
+        swapper = dict(zip(all_pos.index, all_pos["identity_name"]))
         pose_data["class"] = pose_data.index.map(swapper)
 
-        # write "pose_data" back to the file in the "processed" folder
+        # -- write "pose_data" to file --
+        # must be of the same format as SLEAP data - i.e. harp
+        # must be with the same name or at least the same naming convention
+        # must be placed in "processed" folder (instead of "raw")
         raise NotImplementedError
+        
+        self.insert1(key)
 
 
 @schema
