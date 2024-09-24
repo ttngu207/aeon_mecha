@@ -1,25 +1,24 @@
+import itertools
 import json
+from datetime import datetime
+
 import datajoint as dj
 import numpy as np
 import pandas as pd
 import plotly
 import plotly.express as px
 import plotly.graph_objs as go
-from matplotlib import path as mpl_path
-from datetime import datetime
-import itertools
 
 from aeon.analysis import utils as analysis_utils
+from aeon.analysis.block_plotting import (
+    conv2d,
+    gen_hex_grad,
+    gen_patch_style_dict,
+    gen_subject_colors_dict,
+    subject_colors,
+)
 from aeon.dj_pipeline import acquisition, fetch_stream, get_schema_name, streams, tracking
 from aeon.dj_pipeline.analysis.visit import filter_out_maintenance_periods, get_maintenance_periods
-
-from aeon.analysis.block_plotting import (
-    subject_colors,
-    gen_subject_colors_dict,
-    gen_patch_style_dict,
-    gen_hex_grad,
-    conv2d,
-)
 
 schema = dj.schema(get_schema_name("block_analysis"))
 logger = dj.logger
@@ -265,8 +264,7 @@ class BlockAnalysis(dj.Computed):
             )
 
             # update block_end if last timestamp of encoder_df is before the current block_end
-            if encoder_df.index[-1] < block_end:
-                block_end = encoder_df.index[-1]
+            block_end = min(encoder_df.index[-1], block_end)
 
         # Subject data
         # Get all unique subjects that visited the environment over the entire exp;
@@ -328,8 +326,7 @@ class BlockAnalysis(dj.Computed):
             )
 
             # update block_end if last timestamp of pos_df is before the current block_end
-            if pos_df.index[-1] < block_end:
-                block_end = pos_df.index[-1]
+            block_end = min(pos_df.index[-1], block_end)
 
         if block_end != (Block & key).fetch1("block_end"):
             Block.update1({**key, "block_end": block_end})
@@ -501,9 +498,9 @@ class BlockSubjectAnalysis(dj.Computed):
                 )
                 subject_in_patch = in_patch[subject_name]
                 subject_in_patch_cum_time = subject_in_patch.cumsum().values * dt
-                all_subj_patch_pref_dict[patch["patch_name"]][subject_name][
-                    "cum_time"
-                ] = subject_in_patch_cum_time
+                all_subj_patch_pref_dict[patch["patch_name"]][subject_name]["cum_time"] = (
+                    subject_in_patch_cum_time
+                )
 
                 closest_subj_mask = closest_subjects_pellet_ts == subject_name
                 subj_pellets = closest_subjects_pellet_ts[closest_subj_mask]
@@ -511,16 +508,16 @@ class BlockSubjectAnalysis(dj.Computed):
 
                 self.Patch.insert1(
                     key
-                    | dict(
-                        patch_name=patch["patch_name"],
-                        subject_name=subject_name,
-                        in_patch_timestamps=subject_in_patch.index.values,
-                        in_patch_time=subject_in_patch_cum_time[-1],
-                        pellet_count=len(subj_pellets),
-                        pellet_timestamps=subj_pellets.index.values,
-                        patch_threshold=subj_patch_thresh,
-                        wheel_cumsum_distance_travelled=cum_wheel_dist_subj_df[subject_name].values,
-                    )
+                    | {
+                        "patch_name": patch["patch_name"],
+                        "subject_name": subject_name,
+                        "in_patch_timestamps": subject_in_patch.index.values,
+                        "in_patch_time": subject_in_patch_cum_time[-1],
+                        "pellet_count": len(subj_pellets),
+                        "pellet_timestamps": subj_pellets.index.values,
+                        "patch_threshold": subj_patch_thresh,
+                        "wheel_cumsum_distance_travelled": cum_wheel_dist_subj_df[subject_name].values,
+                    }
                 )
 
         # Now that we have computed all individual patch and subject values, we iterate again through
@@ -561,11 +558,17 @@ class BlockSubjectAnalysis(dj.Computed):
             for patch_name in patch_names:
                 cum_pref_dist = all_subj_patch_pref_dict[patch_name][subject_name]["cum_pref_dist"]
                 all_subj_patch_pref_dict[patch_name][subject_name]["running_dist_pref"] = np.divide(
-                    cum_pref_dist, total_dist_pref, out=np.zeros_like(cum_pref_dist), where=total_dist_pref != 0
+                    cum_pref_dist,
+                    total_dist_pref,
+                    out=np.zeros_like(cum_pref_dist),
+                    where=total_dist_pref != 0,
                 )
                 cum_pref_time = all_subj_patch_pref_dict[patch_name][subject_name]["cum_pref_time"]
                 all_subj_patch_pref_dict[patch_name][subject_name]["running_time_pref"] = np.divide(
-                    cum_pref_time, total_time_pref, out=np.zeros_like(cum_pref_time), where=total_time_pref != 0
+                    cum_pref_time,
+                    total_time_pref,
+                    out=np.zeros_like(cum_pref_time),
+                    where=total_time_pref != 0,
                 )
 
         self.Preference.insert(
@@ -749,7 +752,7 @@ class BlockPatchPlots(dj.Computed):
             markers=True,
         )
 
-        weights_block_fig.update_traces(line=dict(width=3), marker=dict(size=8))
+        weights_block_fig.update_traces(line={"width": 3}, marker={"size": 8})
 
         weights_block_fig.update_layout(
             title="Weights in block",
@@ -767,7 +770,7 @@ class BlockPatchPlots(dj.Computed):
                     x=id_grp["time"],
                     y=id_grp["counter"],
                     mode="lines",
-                    line=dict(width=2, color=subject_colors_dict[id_val]),
+                    line={"width": 2, "color": subject_colors_dict[id_val]},
                     name=id_val,
                 )
             )
@@ -778,11 +781,11 @@ class BlockPatchPlots(dj.Computed):
                     x=patch_grp["time"],
                     y=patch_grp["counter"],
                     mode="markers",
-                    marker=dict(
-                        symbol=patch_markers_dict[patch_grp["patch"].iloc[0]],
-                        color=gen_hex_grad("#d8d8d8", patch_grp["norm_thresh_val"]),
-                        size=8,
-                    ),
+                    marker={
+                        "symbol": patch_markers_dict[patch_grp["patch"].iloc[0]],
+                        "color": gen_hex_grad("#d8d8d8", patch_grp["norm_thresh_val"]),
+                        "size": 8,
+                    },
                     name=patch_val,
                     customdata=np.stack((patch_grp["threshold"],), axis=-1),
                     hovertemplate="Threshold: %{customdata[0]:.2f} cm",
@@ -804,17 +807,17 @@ class BlockPatchPlots(dj.Computed):
                         x=patch_grp["time"],
                         y=np.arange(1, (len(patch_grp) + 1)),
                         mode="lines+markers",
-                        line=dict(
-                            width=2,
-                            color=subject_colors_dict[id_val],
-                            dash=patch_linestyles_dict[patch_val],
-                        ),
+                        line={
+                            "width": 2,
+                            "color": subject_colors_dict[id_val],
+                            "dash": patch_linestyles_dict[patch_val],
+                        },
                         # line=dict(width=2, color=subject_colors_dict[id_val]),
-                        marker=dict(
-                            symbol=patch_markers_dict[patch_val],
-                            color=gen_hex_grad("#d8d8d8", patch_grp["norm_thresh_val"]),
-                            size=8,
-                        ),
+                        marker={
+                            "symbol": patch_markers_dict[patch_val],
+                            "color": gen_hex_grad("#d8d8d8", patch_grp["norm_thresh_val"]),
+                            "size": 8,
+                        },
                         name=f"{id_val} - {cur_p} - μ: {cur_p_mean}",
                         customdata=np.stack((patch_grp["threshold"],), axis=-1),
                         hovertemplate="Threshold: %{customdata[0]:.2f} cm",
@@ -835,12 +838,12 @@ class BlockPatchPlots(dj.Computed):
                     y=id_grp["patch_label"],
                     # mode="markers",
                     mode="lines+markers",
-                    line=dict(width=2, color=subject_colors_dict[id_val]),
-                    marker=dict(
-                        symbol=patch_markers_dict[exp_patch_names[0]],
-                        color=gen_hex_grad(subject_colors_dict[id_val], id_grp["norm_thresh_val"]),
-                        size=8,
-                    ),
+                    line={"width": 2, "color": subject_colors_dict[id_val]},
+                    marker={
+                        "symbol": patch_markers_dict[exp_patch_names[0]],
+                        "color": gen_hex_grad(subject_colors_dict[id_val], id_grp["norm_thresh_val"]),
+                        "size": 8,
+                    },
                     name=id_val,
                     customdata=np.stack((id_grp["threshold"],), axis=-1),
                     hovertemplate="Threshold: %{customdata[0]:.2f} cm",
@@ -869,7 +872,7 @@ class BlockPatchPlots(dj.Computed):
                     x=id_grp["time"],
                     y=id_grp["threshold"],
                     mode="lines",
-                    line=dict(width=2, color=subject_colors_dict[id_val]),
+                    line={"width": 2, "color": subject_colors_dict[id_val]},
                     name=id_val,
                 )
             )
@@ -880,9 +883,11 @@ class BlockPatchPlots(dj.Computed):
                     x=patch_grp["time"],
                     y=patch_grp["threshold"],
                     mode="markers",
-                    marker=dict(
-                        symbol=patch_markers_dict[patch_grp["patch"].iloc[0]], color="black", size=8
-                    ),
+                    marker={
+                        "symbol": patch_markers_dict[patch_grp["patch"].iloc[0]],
+                        "color": "black",
+                        "size": 8,
+                    },
                     name=patch_val,
                 )
             )
@@ -907,9 +912,11 @@ class BlockPatchPlots(dj.Computed):
                         x=wheel_ts[patch_name],
                         y=cur_cum_wheel_dist,
                         mode="lines",  # +  markers",
-                        line=dict(
-                            width=2, color=subject_colors_dict[subj], dash=patch_linestyles_dict[patch_name]
-                        ),
+                        line={
+                            "width": 2,
+                            "color": subject_colors_dict[subj],
+                            "dash": patch_linestyles_dict[patch_name],
+                        },
                         name=f"{subj} - {cur_p} - μ: {cur_p_mean}",
                     )
                 )
@@ -929,11 +936,13 @@ class BlockPatchPlots(dj.Computed):
                             x=cur_cum_pel_ct["time"],
                             y=cur_cum_pel_ct["cum_wheel_dist"],
                             mode="markers",
-                            marker=dict(
-                                symbol=patch_markers_dict[patch_name],
-                                color=gen_hex_grad(subject_colors[-1], cur_cum_pel_ct["norm_thresh_val"]),
-                                size=8,
-                            ),
+                            marker={
+                                "symbol": patch_markers_dict[patch_name],
+                                "color": gen_hex_grad(
+                                    subject_colors[-1], cur_cum_pel_ct["norm_thresh_val"]
+                                ),
+                                "size": 8,
+                            },
                             name=f"{subj} - {cur_p} pellets",
                             customdata=np.stack((cur_cum_pel_ct["threshold"],), axis=-1),
                             hovertemplate="Threshold: %{customdata[0]:.2f} cm",
@@ -961,9 +970,11 @@ class BlockPatchPlots(dj.Computed):
                         x=wheel_ts[patch_name],
                         y=cur_run_wheel_pref,
                         mode="lines",
-                        line=dict(
-                            width=2, color=subject_colors_dict[subj], dash=patch_linestyles_dict[patch_name]
-                        ),
+                        line={
+                            "width": 2,
+                            "color": subject_colors_dict[subj],
+                            "dash": patch_linestyles_dict[patch_name],
+                        },
                         name=f"{subj} - {cur_p} - μ: {cur_p_mean}",
                     )
                 )
@@ -983,11 +994,13 @@ class BlockPatchPlots(dj.Computed):
                             x=cur_cum_pel_ct["time"],
                             y=cur_cum_pel_ct["run_wheel_pref"],
                             mode="markers",
-                            marker=dict(
-                                symbol=patch_markers_dict[patch_name],
-                                color=gen_hex_grad(subject_colors[-1], cur_cum_pel_ct["norm_thresh_val"]),
-                                size=8,
-                            ),
+                            marker={
+                                "symbol": patch_markers_dict[patch_name],
+                                "color": gen_hex_grad(
+                                    subject_colors[-1], cur_cum_pel_ct["norm_thresh_val"]
+                                ),
+                                "size": 8,
+                            },
                             name=f"{subj} - {cur_p} pellets",
                             customdata=np.stack((cur_cum_pel_ct["threshold"],), axis=-1),
                             hovertemplate="Threshold: %{customdata[0]:.2f} cm",
@@ -997,7 +1010,7 @@ class BlockPatchPlots(dj.Computed):
             title="Running Patch Preference - Wheel Distance",
             xaxis_title="Time",
             yaxis_title="Preference",
-            yaxis=dict(tickvals=np.arange(0, 1.1, 0.1)),
+            yaxis={"tickvals": np.arange(0, 1.1, 0.1)},
         )
 
         # Figure 7b. Running preference by time in patch
@@ -1013,9 +1026,11 @@ class BlockPatchPlots(dj.Computed):
                         x=wheel_ts[patch_name],
                         y=cur_run_time_pref,
                         mode="lines",
-                        line=dict(
-                            width=2, color=subject_colors_dict[subj], dash=patch_linestyles_dict[patch_name]
-                        ),
+                        line={
+                            "width": 2,
+                            "color": subject_colors_dict[subj],
+                            "dash": patch_linestyles_dict[patch_name],
+                        },
                         name=f"{subj} - {cur_p} - μ: {cur_p_mean}",
                     )
                 )
@@ -1035,11 +1050,13 @@ class BlockPatchPlots(dj.Computed):
                             x=cur_cum_pel_ct["time"],
                             y=cur_cum_pel_ct["run_time_pref"],
                             mode="markers",
-                            marker=dict(
-                                symbol=patch_markers_dict[patch_name],
-                                color=gen_hex_grad(subject_colors[-1], cur_cum_pel_ct["norm_thresh_val"]),
-                                size=8,
-                            ),
+                            marker={
+                                "symbol": patch_markers_dict[patch_name],
+                                "color": gen_hex_grad(
+                                    subject_colors[-1], cur_cum_pel_ct["norm_thresh_val"]
+                                ),
+                                "size": 8,
+                            },
                             name=f"{subj} - {cur_p} pellets",
                             customdata=np.stack((cur_cum_pel_ct["threshold"],), axis=-1),
                             hovertemplate="Threshold: %{customdata[0]:.2f} cm",
@@ -1049,7 +1066,7 @@ class BlockPatchPlots(dj.Computed):
             title="Running Patch Preference - Time in Patch",
             xaxis_title="Time",
             yaxis_title="Preference",
-            yaxis=dict(tickvals=np.arange(0, 1.1, 0.1)),
+            yaxis={"tickvals": np.arange(0, 1.1, 0.1)},
         )
 
         entry = dict(key)
@@ -1156,7 +1173,7 @@ class BlockSubjectPositionPlots(dj.Computed):
         # get Active Region (ROI) locations
         epoch_query = acquisition.Epoch & (acquisition.Chunk & key & chunk_restriction).proj("epoch_start")
         active_region_query = acquisition.EpochConfig.ActiveRegion & epoch_query
-        roi_locs = {n: d for n, d in zip(*active_region_query.fetch("region_name", "region_data"))}
+        roi_locs = dict(zip(*active_region_query.fetch("region_name", "region_data")))
         # get RFID reader locations
         recent_rfid_query = (acquisition.Experiment.proj() * streams.Device.proj() & key).aggr(
             streams.RfidReader & f"rfid_reader_install_time <= '{block_start}'",
@@ -1167,10 +1184,7 @@ class BlockSubjectPositionPlots(dj.Computed):
             & recent_rfid_query
             & "attribute_name = 'Location'"
         )
-        rfid_locs = {
-            n: d for n, d in zip(*rfid_location_query.fetch("rfid_reader_name", "attribute_value"))
-        }
-        rfid_names = list(rfid_locs)
+        rfid_locs = dict(zip(*rfid_location_query.fetch("rfid_reader_name", "attribute_value")))
 
         ## Create position ethogram df
         arena_center_x = int(roi_locs["ArenaCenter"]["X"])
@@ -1182,7 +1196,7 @@ class BlockSubjectPositionPlots(dj.Computed):
         patch_radius, gate_radius = 120, 30  # in px
         rois = list(exp_patch_names) + ["Nest", "Gate", "Corridor"]  # ROIs: patches, nest, gate, corridor
         roi_colors = plotly.colors.qualitative.Dark2
-        roi_colors_dict = {roi: roi_c for (roi, roi_c) in zip(rois, roi_colors)}
+        roi_colors_dict = dict(zip(rois, roi_colors))
         pos_eth_df = pd.DataFrame(
             columns=(["Subject"] + rois), index=centroid_df.index
         )  # df to create eth fig
@@ -1255,7 +1269,7 @@ class BlockSubjectPositionPlots(dj.Computed):
                 zmax=(img_grid_smooth.max() / 1000),
                 x=np.arange(img_grid.shape[0]),
                 y=np.arange(img_grid.shape[1]),
-                labels=dict(x="X", y="Y", color="Norm Freq / 1e3"),
+                labels={"x": "X", "y": "Y", "color": "Norm Freq / 1e3"},
                 aspect="auto",
             )
             pos_heatmap_fig.update_layout(title=f"Position Heatmap ({id_val})")
@@ -1283,13 +1297,13 @@ class BlockSubjectPositionPlots(dj.Computed):
             yaxis_title="Subject",
             width=1000,
             height=250,
-            yaxis=dict(
-                categoryorder="total ascending",
-                categoryarray=sorted(melted_df["Subject"].unique()),
-                tickmode="array",
-                tickvals=sorted(melted_df["Subject"].unique()),
-                ticktext=sorted(melted_df["Subject"].unique()),
-            ),
+            yaxis={
+                "categoryorder": "total ascending",
+                "categoryarray": sorted(melted_df["Subject"].unique()),
+                "tickmode": "array",
+                "tickvals": sorted(melted_df["Subject"].unique()),
+                "ticktext": sorted(melted_df["Subject"].unique()),
+            },
         )
 
         entry = dict(key)
@@ -1322,8 +1336,8 @@ class AnalysisNote(dj.Manual):
 
 
 def get_threshold_associated_pellets(patch_key, start, end):
-    """
-    Retrieve the pellet delivery timestamps associated with each patch threshold update within the specified start-end time.
+    """Retrieve the pellet delivery timestamps associated with each patch threshold update within the specified start-end time.
+
     1. Get all patch state update timestamps (DepletionState): let's call these events "A"
         - Remove all events within 1 second of each other
         - Remove all events without threshold value (NaN)
