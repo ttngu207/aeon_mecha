@@ -16,7 +16,7 @@ _default_repository_config = {"ceph_aeon": "/ceph/aeon"}
 if "custom" not in dj.config:
     dj.config["custom"] = {}
 
-db_prefix = dj.config["custom"].get("database.prefix", _default_database_prefix)
+db_prefix = "aeon_tri2025_"  # schema prefix dedicated for Aeon Hackathon 2025
 
 repository_config = dj.config["custom"].get("repository_config", _default_repository_config)
 
